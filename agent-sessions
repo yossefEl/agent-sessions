@@ -1,0 +1,5 @@
+#!/bin/sh
+# agent-sessions launcher — runs the package from this directory, no install step.
+DIR=$(cd "$(dirname "$0")" && pwd)
+export PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m agent_sessions "$@"

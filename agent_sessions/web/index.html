@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Sessions</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ── top bar: brand · pill tabs · actions ──────────────────────────── -->
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-name">Agent<b>Sessions</b></span>
+  </div>
+
+  <nav class="tabs" id="nav">
+    <a href="#/overview" data-tab="overview">Overview</a>
+    <a href="#/sessions" data-tab="sessions">Sessions</a>
+    <a href="#/search"   data-tab="search">Search</a>
+  </nav>
+
+  <div class="topactions">
+    <button id="searchTrigger" class="iconbtn" title="Jump to a session (⌘K)"
+            aria-label="Jump to a session">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M10.4 10.4 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    </button>
+    <button id="reindex" class="iconbtn" title="Refresh index (r)" aria-label="Refresh index">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.8V5H10.3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="theme" class="iconbtn" title="Light / dark (t)" aria-label="Toggle theme">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.4a5.6 5.6 0 1 0 5.5 6.6A4.5 4.5 0 0 1 8 2.4Z" fill="currentColor"/></svg>
+    </button>
+    <span class="avatar" id="avatar" title="Local index" aria-hidden="true"></span>
+  </div>
+</header>
+
+<!-- ── page header: title + inline KPI strip ─────────────────────────── -->
+<section class="pagehead">
+  <div class="pagetitle">
+    <h1 id="pageTitle">Dashboard</h1>
+    <p id="pageSub">Here's a snapshot of your agent activity.</p>
+  </div>
+  <div class="kpis" id="kpis"></div>
+</section>
+
+<!-- ── filter row ────────────────────────────────────────────────────── -->
+<div class="filterrow" id="filterrow">
+  <div class="chips" id="agentChips"></div>
+  <select id="projectFilter" class="select" aria-label="Filter by project">
+    <option value="">All projects</option>
+  </select>
+  <select id="rangeFilter" class="select" aria-label="Filter by date range">
+    <option value="">All time</option>
+    <option value="7">Last 7 days</option>
+    <option value="30">Last 30 days</option>
+    <option value="90">Last 90 days</option>
+    <option value="365">Last year</option>
+  </select>
+  <span class="rowspacer"></span>
+  <span class="rowmeta" id="rowMeta"></span>
+</div>
+
+<main id="view"></main>
+
+<!-- ── command palette ───────────────────────────────────────────────── -->
+<div class="palette-scrim" id="paletteScrim" hidden>
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+    <div class="palette-input">
+      <svg viewBox="0 0 16 16" aria-hidden="true" class="pico"><circle cx="7" cy="7" r="4.3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M10.4 10.4 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      <input id="paletteInput" autocomplete="off" spellcheck="false"
+             placeholder="Jump to a session, or type a command…">
+    </div>
+    <div class="palette-list" id="paletteList"></div>
+    <div class="palette-foot">
+      <span><kbd>↑↓</kbd> Navigate</span>
+      <span><kbd>↵</kbd> Open</span>
+      <span><kbd>esc</kbd> Close</span>
+    </div>
+  </div>
+</div>
+
+<div id="tooltip" class="tooltip" hidden></div>
+<div id="toast" class="toast" hidden></div>
+
+<script src="/static/render.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

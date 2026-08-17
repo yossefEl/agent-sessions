@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Local state — the index database and your own price overrides live in
+# ~/.agent-sessions by default, but ignore them here too in case --home
+# is pointed at the working tree.
+.agent-sessions/
+*.db
+*.db-wal
+*.db-shm
+prices.json
+
+# Editors
+.idea/
+.vscode/
+*.swp
