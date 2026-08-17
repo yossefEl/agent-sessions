@@ -30,9 +30,9 @@ def _decode_project(dirname: str) -> str:
 
     Claude encodes the cwd by replacing '/' with '-', which is lossy when the
     path itself contains dashes. We drop the leading home-directory segments
-    and keep the rest, so '-Users-topo-Documents-trading-vwap-1m' reads as
-    'trading-vwap-1m' rather than '1m'. When the record carries a real `cwd`
-    it is preferred over this guess.
+    and keep the rest, so '-Users-alice-Documents-my-side-project' reads as
+    'my-side-project' rather than 'project'. When the record carries a real
+    `cwd` it is preferred over this guess.
     """
     parts = [p for p in dirname.split("-") if p]
     for lead in (["Users"], ["home"]):
