@@ -107,6 +107,8 @@ change. Sans-serif throughout; monospace only for code and raw transcript text.
   complete transcript: prompts, replies, thinking, tool calls and results, with
   subagent turns interleaved and labelled. Filter by message kind or by substring.
   **Raw text** switches the whole transcript back to exactly what is stored.
+  **Export** writes the session out as Markdown, standalone HTML, or PDF, or
+  copies it to the clipboard — see below.
 - **Search** — SQLite FTS5 across every indexed message, with highlighted
   snippets that link back into the session.
 
@@ -131,6 +133,32 @@ palette is re-validated whenever the surfaces change, not assumed.
 | `t` | Toggle light / dark |
 | `r` | Refresh the index |
 | `esc` | Close the palette, or leave the current field |
+
+### Export
+
+The **Export** menu on a session offers:
+
+| Option | Result |
+|---|---|
+| Copy as Markdown | The whole session on the clipboard, ready to paste into an issue or a doc |
+| Download Markdown | `.md` file — prose as written, tool calls as fenced code in their real language |
+| Download HTML | A single self-contained `.html` file: inline CSS, syntax highlighting, no network needed |
+| Print / Save as PDF | The same HTML, print-styled, handed to the browser's PDF writer |
+
+Two things worth knowing:
+
+- **Exports contain the entire session, not the part you have scrolled to.** The
+  transcript view loads 150 messages at a time; the exporter paginates the whole
+  session first, so a 5,000-message session exports all 5,000.
+- **PDF goes through the browser's print dialog** rather than a bundled PDF
+  engine. That keeps the zero-dependency promise; choose "Save as PDF" as the
+  destination. The `@media print` rules avoid splitting a message across pages.
+
+Markdown output keeps tool calls readable rather than dumping JSON: a `Bash`
+call becomes a shell block, a `Write` becomes the file path plus its content
+fenced in the language its extension implies, an `Edit` becomes before/after
+blocks. Fences are widened when the content itself contains backticks, so
+wrapped output can never terminate its own code block.
 
 ### Transcript formatting
 

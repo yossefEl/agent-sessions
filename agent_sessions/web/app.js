@@ -700,7 +700,7 @@ async function viewSession(root, key) {
       loadMessages(true);
     },
   });
-  controls.append(kindSelect, search, rawToggle);
+  controls.append(kindSelect, search, rawToggle, exportMenu(s));
 
   async function loadMessages(reset) {
     if (reset) list.replaceChildren();
@@ -726,6 +726,121 @@ async function viewSession(root, key) {
   root.append(el("div", { style: "margin-top:14px" },
     card("Transcript", `${s.n_messages} messages`, controls, list, moreWrap)));
   loadMessages(true);
+}
+
+/* ---------- export ------------------------------------------------------ */
+
+/**
+ * Every message in the session, not just the page the viewer has scrolled to.
+ * The transcript view loads 150 at a time; an export that only captured those
+ * would silently be a fragment.
+ */
+async function fetchAllMessages(key, onProgress) {
+  const all = [];
+  let offset = 0;
+  let total = Infinity;
+  while (offset < total) {
+    const res = await api(`/api/session/${encodeURIComponent(key)}/messages`,
+      { limit: 1000, offset });
+    total = res.total;
+    all.push(...res.messages);
+    offset += res.messages.length;
+    if (!res.messages.length) break;          // guard against a stuck cursor
+    if (onProgress) onProgress(all.length, total);
+  }
+  return all;
+}
+
+function downloadBlob(text, filename, mime) {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+  const a = el("a", { href: url, download: filename });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function exportSession(session, format) {
+  const R = window.AS_RENDER;
+  toast("Collecting the full transcript…", 60000);
+  let messages;
+  try {
+    messages = await fetchAllMessages(session.key, (n, total) => {
+      if (total > 1200) toast(`Collecting transcript… ${n}/${total}`, 60000);
+    });
+  } catch (err) {
+    return toast("Export failed: " + err.message, 5000);
+  }
+
+  try {
+    if (format === "copy") {
+      const md = R.sessionToMarkdown(session, messages);
+      await navigator.clipboard.writeText(md);
+      toast(`Copied ${messages.length} messages as Markdown`);
+    } else if (format === "md") {
+      downloadBlob(R.sessionToMarkdown(session, messages),
+        R.exportFilename(session, "md"), "text/markdown;charset=utf-8");
+      toast(`Exported ${messages.length} messages as Markdown`);
+    } else if (format === "html") {
+      downloadBlob(R.sessionToHtml(session, messages),
+        R.exportFilename(session, "html"), "text/html;charset=utf-8");
+      toast(`Exported ${messages.length} messages as HTML`);
+    } else if (format === "pdf") {
+      // No PDF library ships with this tool, so the export is a print-styled
+      // document handed to the browser's own PDF writer.
+      const win = window.open("", "_blank");
+      if (!win) {
+        return toast("Allow pop-ups for this site to print to PDF", 5000);
+      }
+      win.document.write(R.sessionToHtml(session, messages));
+      win.document.close();
+      win.addEventListener("load", () => setTimeout(() => win.print(), 250));
+      toast("Opened print view — choose “Save as PDF”");
+    }
+  } catch (err) {
+    toast("Export failed: " + err.message, 5000);
+  }
+}
+
+/** Small dropdown of export actions, anchored to its trigger button. */
+function exportMenu(session) {
+  const items = [
+    ["copy", "Copy as Markdown"],
+    ["md", "Download Markdown (.md)"],
+    ["html", "Download HTML (.html)"],
+    ["pdf", "Print / Save as PDF"],
+  ];
+  const menu = el("div", { class: "menu", hidden: "" },
+    ...items.map(([fmt, label]) => el("button", {
+      class: "menu-item", text: label,
+      onclick: () => { close(); exportSession(session, fmt); },
+    })));
+
+  const btn = el("button", {
+    class: "btn", text: "Export ▾",
+    onclick: (e) => {
+      e.stopPropagation();
+      menu.hidden ? open() : close();
+    },
+  });
+
+  // Attached immediately, not on a timer: the opening click bubbles to the
+  // document too, but `wrap.contains` already ignores clicks inside the menu.
+  function open() {
+    menu.hidden = false;
+    document.addEventListener("click", onAway);
+    document.addEventListener("keydown", onEsc);
+  }
+  function close() {
+    menu.hidden = true;
+    document.removeEventListener("click", onAway);
+    document.removeEventListener("keydown", onEsc);
+  }
+  const onAway = (e) => { if (!wrap.contains(e.target)) close(); };
+  const onEsc = (e) => { if (e.key === "Escape") close(); };
+
+  const wrap = el("div", { class: "menu-wrap" }, btn, menu);
+  return wrap;
 }
 
 /** Message body: markdown for prose, syntax-highlighted code for tool traffic. */

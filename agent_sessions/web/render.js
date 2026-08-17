@@ -415,8 +415,219 @@ function renderToolResult(text) {
   return codeBlock(s, isDiff ? "diff" : "");
 }
 
+/* ---------- export ------------------------------------------------------- */
+
+/** A fence long enough that the content can never terminate it early. */
+function fenceFor(text) {
+  let longest = 0;
+  for (const run of String(text).match(/`+/g) || []) {
+    longest = Math.max(longest, run.length);
+  }
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
+function mdCode(text, lang = "") {
+  const body = String(text ?? "").replace(/\s+$/, "");
+  const f = fenceFor(body);
+  return `${f}${lang}\n${body}\n${f}\n`;
+}
+
+function speakerOf(m) {
+  if (m.kind === "tool_use") return `Tool call — ${m.tool_name || "tool"}`;
+  if (m.kind === "tool_result") return "Tool result";
+  if (m.kind === "thinking") return "Thinking";
+  if (m.role === "system") return "System";
+  return m.role === "user" ? "User" : "Assistant";
+}
+
+function stamp(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  return isNaN(d) ? "" : d.toISOString().replace("T", " ").slice(0, 16) + "Z";
+}
+
+/** Arguments of a tool call, as the code it actually represents. */
+function toolCallMarkdown(m) {
+  let args;
+  try {
+    args = JSON.parse(m.text || "");
+  } catch {
+    return mdCode(m.text || "", "json");
+  }
+  if (!args || typeof args !== "object") return mdCode(m.text || "", "json");
+
+  if (typeof args.command === "string") {
+    return (args.description ? `_${args.description}_\n\n` : "") +
+           mdCode(args.command, "sh");
+  }
+  if (typeof args.content === "string" && typeof args.file_path === "string") {
+    return `\`${args.file_path}\`\n\n` +
+           mdCode(args.content, langFromPath(args.file_path));
+  }
+  if (typeof args.old_string === "string" && typeof args.new_string === "string") {
+    const lang = langFromPath(args.file_path);
+    return `\`${args.file_path || ""}\`\n\nReplace:\n\n` + mdCode(args.old_string, lang) +
+           `\nWith:\n\n` + mdCode(args.new_string, lang);
+  }
+  return mdCode(JSON.stringify(args, null, 2), "json");
+}
+
+/** Whole session as Markdown — the format that also feeds "copy". */
+function sessionToMarkdown(session, messages) {
+  const meta = [
+    ["Agent", session.agent],
+    ["Model", session.model],
+    ["Project", session.project],
+    ["Branch", session.git_branch],
+    ["Started", stamp(session.started_at)],
+    ["Messages", session.n_messages],
+    ["Tool calls", session.n_tool_calls],
+    ["Subagents", session.n_subagents || null],
+    ["Tokens", session.total_tokens ? session.total_tokens.toLocaleString() : null],
+    ["Est. cost", session.unpriced && !session.cost_usd ? "not priced"
+      : session.cost_usd != null ? "$" + Number(session.cost_usd).toFixed(2) : null],
+  ].filter(([, v]) => v !== null && v !== undefined && v !== "");
+
+  const out = [`# ${session.title || "Untitled session"}\n`];
+  if (session.cwd) out.push(`\`${session.cwd}\`\n`);
+  out.push(meta.map(([k, v]) => `- **${k}:** ${v}`).join("\n") + "\n");
+  out.push("\n---\n");
+
+  for (const m of messages) {
+    const who = speakerOf(m);
+    const when = stamp(m.ts);
+    const side = m.sidechain ? ` · subagent ${m.label || ""}`.trimEnd() : "";
+    out.push(`\n## ${who}${when ? ` — ${when}` : ""}${side}\n`);
+
+    if (m.kind === "tool_use") out.push(toolCallMarkdown(m));
+    else if (m.kind === "tool_result") out.push(mdCode(m.text || ""));
+    else if (m.kind === "thinking") {
+      out.push(String(m.text || "").split("\n").map((l) => `> ${l}`).join("\n") + "\n");
+    } else out.push(String(m.text || "") + "\n");
+
+    if (m.truncated) out.push("\n_(truncated in the index)_\n");
+  }
+  out.push(`\n---\n\nExported from agent-sessions on ${stamp(new Date().toISOString())}.\n`);
+  return out.join("");
+}
+
+/* Standalone stylesheet for the HTML export: light-only, print-friendly, and
+   inlined so the file works with no network and no sibling assets. */
+const EXPORT_CSS = `
+:root{--ink:#1c1917;--ink2:#57534e;--muted:#726960;--line:#e7ded2;--inset:#f4f0ea;
+--accent:#b4441f;--wash:#fbeade;--user:#2a78d6;
+--tok-c:#6b6a65;--tok-s:#0a6b2e;--tok-n:#9a4a00;--tok-k:#6d28d9;--tok-b:#0b6b6b;
+--tok-f:#1c5cab;--tok-a:#9a3412;--tok-t:#a02020;--tok-p:#52514e}
+*{box-sizing:border-box}
+body{margin:0 auto;padding:44px 32px 72px;max-width:900px;background:#fff;color:var(--ink);
+font:15px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+-webkit-font-smoothing:antialiased}
+h1{font-size:27px;letter-spacing:-.03em;margin:0 0 8px}
+.cwd{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);margin-bottom:18px}
+.meta{display:flex;flex-wrap:wrap;gap:8px 22px;font-size:13px;color:var(--muted);
+padding-bottom:20px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.meta b{color:var(--ink);font-weight:600}
+.msg{padding:16px 0;border-bottom:1px solid #f1ece5;page-break-inside:avoid}
+.who{font-size:12.5px;font-weight:700;color:var(--ink2);margin-bottom:7px;
+display:flex;gap:9px;align-items:baseline}
+.who .t{font-weight:400;color:var(--muted)}
+.who .sub{color:var(--accent);font-weight:600}
+.msg.user{background:var(--wash);border-radius:10px;padding:16px 18px;border-bottom:0;margin:8px 0}
+.msg.user .who{color:var(--user)}
+.msg.thinking .body{color:var(--muted)}
+.body>:first-child{margin-top:0}.body>:last-child{margin-bottom:0}
+p{margin:0 0 10px;white-space:pre-wrap}
+ul,ol{margin:0 0 10px;padding-left:22px}li{margin:3px 0;white-space:pre-wrap}
+h3,h4,h5,h6{margin:16px 0 7px;line-height:1.35}
+blockquote{margin:0 0 10px;padding:2px 0 2px 14px;border-left:2px solid #d9cfc1;color:var(--ink2)}
+a{color:var(--accent)}
+code{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--inset);
+border-radius:5px;padding:2px 5px}
+.codewrap{margin:0 0 10px}
+.codelabel{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);
+padding:6px 12px;background:var(--inset);border-radius:8px 8px 0 0;border-bottom:1px solid #e9e2d8}
+.codelabel+.code{border-radius:0 0 8px 8px}
+pre.code{margin:0;padding:12px 14px;background:var(--inset);border-radius:8px;
+font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;
+white-space:pre-wrap;overflow-wrap:anywhere;tab-size:2}
+pre.code code{background:none;padding:0;font:inherit}
+.params{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+.param{display:flex;gap:12px;font-size:13px}
+.param .pk{color:var(--muted);min-width:104px}
+.param .pv{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+.toolnote{font-size:13.5px;color:var(--ink2);margin-bottom:8px}
+table{border-collapse:collapse;font-size:13px;margin-bottom:10px}
+th,td{border:1px solid var(--line);padding:6px 10px}th{background:var(--inset)}
+hr{border:0;border-top:1px solid var(--line);margin:16px 0}
+.foot{margin-top:32px;padding-top:16px;border-top:1px solid var(--line);
+font-size:12px;color:var(--muted)}
+.tok-c{color:var(--tok-c);font-style:italic}.tok-s{color:var(--tok-s)}
+.tok-n{color:var(--tok-n)}.tok-k{color:var(--tok-k);font-weight:600}
+.tok-b{color:var(--tok-b)}.tok-f{color:var(--tok-f)}.tok-a{color:var(--tok-a)}
+.tok-t{color:var(--tok-t)}.tok-v{color:var(--tok-b)}.tok-p{color:var(--tok-p)}
+.tok-ins{color:var(--tok-s)}.tok-del{color:var(--tok-t)}.tok-h{color:var(--tok-k);font-weight:600}
+@media print{
+  body{padding:0;max-width:none;font-size:11.5pt}
+  .msg{border-bottom:1px solid #eee}
+  pre.code{background:#f6f4f1;border:1px solid #eee}
+  a{text-decoration:none}
+  @page{margin:16mm}
+}`;
+
+/** Whole session as a standalone HTML document (also what "PDF" prints). */
+function sessionToHtml(session, messages) {
+  const meta = [
+    ["Agent", session.agent], ["Model", session.model],
+    ["Project", session.project], ["Branch", session.git_branch],
+    ["Started", stamp(session.started_at)],
+    ["Messages", session.n_messages], ["Tool calls", session.n_tool_calls],
+    ["Subagents", session.n_subagents || null],
+    ["Tokens", session.total_tokens ? session.total_tokens.toLocaleString() : null],
+    ["Est. cost", session.unpriced && !session.cost_usd ? "not priced"
+      : session.cost_usd != null ? "$" + Number(session.cost_usd).toFixed(2) : null],
+  ].filter(([, v]) => v !== null && v !== undefined && v !== "");
+
+  const body = messages.map((m) => {
+    let inner;
+    if (m.kind === "tool_use") inner = renderToolUse(m.tool_name, m.text || "");
+    else if (m.kind === "tool_result") inner = renderToolResult(m.text || "");
+    else if (m.role === "system") inner = renderSystem(m.text || "");
+    else inner = renderMarkdown(m.text || "");
+    const cls = m.kind === "thinking" ? "thinking" : m.role;
+    const sub = m.sidechain
+      ? ` <span class="sub">subagent ${escHtml(m.label || "")}</span>` : "";
+    return `<div class="msg ${escHtml(cls)}">` +
+      `<div class="who">${escHtml(speakerOf(m))}` +
+      `<span class="t">${escHtml(stamp(m.ts))}</span>${sub}</div>` +
+      `<div class="body">${inner}</div></div>`;
+  }).join("\n");
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escHtml(session.title || "Session")}</title>
+<style>${EXPORT_CSS}</style></head><body>
+<h1>${escHtml(session.title || "Untitled session")}</h1>
+${session.cwd ? `<div class="cwd">${escHtml(session.cwd)}</div>` : ""}
+<div class="meta">${meta.map(([k, v]) =>
+    `<div>${escHtml(k)} <b>${escHtml(v)}</b></div>`).join("")}</div>
+${body}
+<div class="foot">Exported from agent-sessions on ${escHtml(stamp(new Date().toISOString()))}.</div>
+</body></html>`;
+}
+
+/** Filesystem-safe basename for a downloaded export. */
+function exportFilename(session, ext) {
+  const slug = String(session.title || "session")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60)
+    || "session";
+  const id = String(session.session_id || "").slice(0, 8);
+  return `${slug}${id ? "-" + id : ""}.${ext}`;
+}
+
 // globalThis so the same file can be exercised from node in a test harness.
 (typeof window !== "undefined" ? window : globalThis).AS_RENDER = {
   escHtml, highlight, renderMarkdown, codeBlock,
   renderToolUse, renderToolResult, renderSystem, langFromPath,
+  sessionToMarkdown, sessionToHtml, exportFilename,
 };

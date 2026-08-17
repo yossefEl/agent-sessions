@@ -73,6 +73,50 @@ t("null-ish input", R.renderMarkdown(null), "");
 t("very long line", R.renderMarkdown("x".repeat(50000)).length > 50000, "true");
 t("nested backticks", R.renderMarkdown("``a ` b``"), "<code>");
 
+/* --- export: markdown, standalone html, filenames --- */
+const SESSION = {
+  key: "claude:abc", session_id: "abc12345", title: "Fix the login bug",
+  agent: "claude", model: "claude-opus-5", project: "my-app", cwd: "/w/my-app",
+  started_at: "2026-08-17T09:14:00Z", n_messages: 6, n_tool_calls: 2,
+  n_subagents: 1, total_tokens: 1234567, cost_usd: 12.5,
+};
+const MSGS = [
+  { role: "user", kind: "text", ts: "2026-08-17T09:14:00Z", text: "Fix the **login** bug" },
+  { role: "assistant", kind: "thinking", ts: "2026-08-17T09:14:10Z", text: "Checking auth" },
+  { role: "assistant", kind: "tool_use", tool_name: "Bash", ts: "2026-08-17T09:14:20Z",
+    text: JSON.stringify({ command: "grep -rn login src/", description: "Find it" }) },
+  { role: "tool", kind: "tool_result", ts: "2026-08-17T09:14:21Z",
+    text: "output with ``` a fence ``` in it" },
+  { role: "assistant", kind: "tool_use", tool_name: "Write", ts: "2026-08-17T09:14:30Z",
+    text: JSON.stringify({ file_path: "src/auth.py", content: "def login():\n    return True" }) },
+  { role: "assistant", kind: "text", ts: "2026-08-17T09:15:00Z",
+    sidechain: true, label: "agent-a1", text: "Done" },
+];
+const MD = R.sessionToMarkdown(SESSION, MSGS);
+const HTML = R.sessionToHtml(SESSION, MSGS);
+
+t("md has title", MD, "# Fix the login bug");
+t("md has metadata", MD, "**Model:** claude-opus-5");
+t("md tags subagent turns", MD, "subagent agent-a1");
+t("md renders bash as shell", MD, "```sh\ngrep -rn login src/");
+t("md picks lang from file path", MD, "```py\ndef login():");
+t("md quotes thinking", MD, "> Checking auth");
+// Wrapped tool output must not be able to terminate its own fence.
+t("md widens fence past nested backticks", MD, "````\noutput with ``` a fence");
+t("md keeps prose fences untouched", R.sessionToMarkdown(SESSION,
+  [{ role: "assistant", kind: "text", text: "a ```js\nx\n``` b" }]), "```js");
+
+t("html is a standalone document", HTML, /^<!doctype html>/);
+t("html inlines its stylesheet", HTML, "<style>");
+t("html carries syntax colours", HTML, ".tok-k");
+t("html highlights code", HTML, 'class="tok-');
+t("html has print rules", HTML, "@media print");
+t("html escapes untrusted text", R.sessionToHtml(
+  { ...SESSION, title: "<script>x</script>" }, []), /^(?!.*<script>x)/s);
+t("filename is slugged", R.exportFilename(SESSION, "md"), "fix-the-login-bug-abc12345.md");
+t("filename survives an empty title",
+  R.exportFilename({ title: "", session_id: "" }, "html"), "session.html");
+
 console.log(fail
   ? `\n${pass} passed, ${fail} FAILED`
   : `\nall ${pass} assertions passed`);
