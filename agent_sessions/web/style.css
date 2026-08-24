@@ -45,10 +45,19 @@
   --up:   #15803d;
   --down: #b4441f;
 
-  --r:    16px;
-  --r-sm: 10px;
-  --shadow: 0 1px 2px rgba(60, 40, 20, .04);
-  --shadow-lg: 0 20px 48px rgba(60, 40, 20, .16);
+  --r:    20px;
+  --r-sm: 13px;
+  --r-xs: 9px;
+  /* Layered and wide: depth you feel rather than see. A single tight shadow
+     reads as a hard edge; two soft ones read as a lift. */
+  --shadow:    0 1px 2px rgba(60, 40, 20, .035), 0 6px 16px -10px rgba(60, 40, 20, .10);
+  --shadow-md: 0 1px 3px rgba(60, 40, 20, .05),  0 12px 28px -14px rgba(60, 40, 20, .18);
+  --shadow-lg: 0 2px 6px rgba(60, 40, 20, .05),  0 28px 60px -20px rgba(60, 40, 20, .22);
+
+  /* One easing curve everywhere: decelerating, never bouncy. */
+  --ease:     cubic-bezier(.32, .72, 0, 1);
+  --dur:      .18s;
+  --dur-slow: .34s;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -80,8 +89,9 @@
     --tok-p: #c3c2b7;
     --up:   #4ade80;
     --down: #f2743f;
-    --shadow: none;
-    --shadow-lg: 0 20px 48px rgba(0, 0, 0, .55);
+    --shadow:    0 1px 2px rgba(0, 0, 0, .30), 0 6px 16px -10px rgba(0, 0, 0, .45);
+    --shadow-md: 0 2px 6px rgba(0, 0, 0, .34), 0 14px 30px -14px rgba(0, 0, 0, .55);
+    --shadow-lg: 0 4px 12px rgba(0, 0, 0, .38), 0 30px 64px -20px rgba(0, 0, 0, .62);
   }
 }
 
@@ -111,8 +121,9 @@
   --tok-p: #c3c2b7;
   --up:   #4ade80;
   --down: #f2743f;
-  --shadow: none;
-  --shadow-lg: 0 20px 48px rgba(0, 0, 0, .55);
+  --shadow:    0 1px 2px rgba(0, 0, 0, .30), 0 6px 16px -10px rgba(0, 0, 0, .45);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, .34), 0 14px 30px -14px rgba(0, 0, 0, .55);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, .38), 0 30px 64px -20px rgba(0, 0, 0, .62);
 }
 
 * { box-sizing: border-box; }
@@ -121,7 +132,7 @@ body {
   margin: 0;
   background: var(--page);
   color: var(--ink);
-  font: 14px/1.55 var(--sans);
+  font: 14px/1.62 var(--sans);
   -webkit-font-smoothing: antialiased;
 }
 ::selection { background: color-mix(in srgb, var(--accent-mark) 26%, transparent); }
@@ -238,7 +249,7 @@ button, input, select { font: inherit; }
 /* ---------- content ------------------------------------------------------ */
 main { padding: 0 32px 80px; }
 
-.grid { display: grid; gap: 16px; }
+.grid { display: grid; gap: 18px; }
 .grid.halves { grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); }
 .grid.thirds { grid-template-columns: 2fr 1fr; align-items: start; }
 .grid.tiles { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
@@ -253,7 +264,7 @@ main { padding: 0 32px 80px; }
 
 .card {
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--r);
   padding: 22px 24px;
   box-shadow: var(--shadow);
@@ -582,6 +593,109 @@ kbd {
   padding: 11px 20px; font-size: 13px; box-shadow: var(--shadow-lg);
 }
 
+/* ---------------------------------------------------------------------------
+   Softness & motion.
+
+   Nothing above this point moved: the UI snapped between states, and hard
+   1px edges did all the separating. Here every interactive surface eases,
+   content arrives instead of appearing, and edges are carried by soft shadow
+   rather than line. All of it collapses under prefers-reduced-motion.
+--------------------------------------------------------------------------- */
+
+html { scroll-behavior: smooth; }
+
+/* Every surface a pointer can touch eases rather than snaps. */
+.tabs a, .iconbtn, .chip, .select, .btn, .menu-item, .pitem, .backlink,
+.rowlink, .hitrow, .searchbox, .field, .card, .avatar, .brand-mark,
+th.sortable, .ranked-label, .ranked-value, .legend .item, .badge, .delta {
+  transition: background-color var(--dur) var(--ease),
+              border-color     var(--dur) var(--ease),
+              color            var(--dur) var(--ease),
+              box-shadow       var(--dur) var(--ease),
+              opacity          var(--dur) var(--ease),
+              transform        var(--dur) var(--ease);
+}
+tr.row td { transition: background-color var(--dur) var(--ease); }
+.mark { transition: opacity var(--dur) var(--ease); }
+
+/* Bars sweep out to length instead of arriving at it. */
+.ranked-bar { transition: width var(--dur-slow) var(--ease); }
+
+/* Press gives slightly under the finger. */
+.btn:active, .chip:active, .iconbtn:active, .menu-item:active,
+.pitem:active { transform: scale(.97); }
+
+/* Cards rise toward the pointer. Shadow only — a transform here would nudge
+   the charts inside them out from under the cursor mid-hover. */
+.card:hover { box-shadow: var(--shadow-md); }
+.rowlink:hover, .hitrow:hover { transform: translateX(2px); }
+
+/* ---------- entrances ---------------------------------------------------- */
+@keyframes rise { from { opacity: 0; transform: translateY(9px); }
+                  to   { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop  { from { opacity: 0; transform: translateY(-5px) scale(.97); }
+                  to   { opacity: 1; transform: none; } }
+
+.card, .toolbar, .empty { animation: rise var(--dur-slow) var(--ease) both; }
+
+/* The stagger stops after the first screenful, so a long page never sits
+   behind an animation queue. */
+.grid > .card:nth-child(2) { animation-delay: .035s; }
+.grid > .card:nth-child(3) { animation-delay: .07s; }
+.grid > .card:nth-child(4) { animation-delay: .105s; }
+.grid > .card:nth-child(5) { animation-delay: .14s; }
+.grid > .card:nth-child(6) { animation-delay: .175s; }
+
+/* Transcript rows only fade: hundreds of them sliding at once is noise. */
+.msg { animation: fade var(--dur-slow) var(--ease) both; }
+
+/* These all toggle [hidden], and leaving display:none restarts an animation. */
+.menu    { animation: pop .16s var(--ease); transform-origin: top right; }
+.palette-scrim { animation: fade var(--dur) var(--ease); }
+.palette { animation: pop var(--dur-slow) var(--ease); transform-origin: top center; }
+.tooltip { animation: fade .12s var(--ease); }
+.toast   { animation: rise var(--dur-slow) var(--ease); }
+
+/* ---------- softened edges ----------------------------------------------- */
+/* Rounder wells and pills to match the new card radius. */
+.msg.user { border-radius: var(--r); padding: 18px 20px; }
+.menu, .tooltip { border-radius: var(--r-sm); }
+.menu-item, .pitem, .hitrow, .rowlink { border-radius: var(--r-xs); }
+.rendered code, kbd { border-radius: 6px; }
+
+/* The sticky bar dissolves into the page instead of ending on a line. */
+.topbar::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 18px;
+  pointer-events: none;
+  background: linear-gradient(color-mix(in srgb, var(--page) 88%, transparent),
+                              color-mix(in srgb, var(--page) 0%, transparent));
+}
+
+/* Thin, rounded, recessive scrollbars — the default chrome is the harshest
+   edge on the page. */
+* { scrollbar-width: thin; scrollbar-color: var(--axis) transparent; }
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--axis) 72%, transparent);
+  background-clip: content-box; border: 3px solid transparent; border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--axis); background-clip: content-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+  .rowlink:hover, .hitrow:hover { transform: none; }
+}
+
 /* ---------- narrow ------------------------------------------------------- */
 @media (max-width: 1080px) {
   .grid.thirds { grid-template-columns: 1fr; }
@@ -596,3 +710,109 @@ kbd {
   main { padding: 0 16px 56px; }
   .msg { grid-template-columns: 1fr; gap: 6px; }
 }
+
+/* ---------- projects as folders ------------------------------------------ */
+.folder-group { margin-top: 22px; }
+.folder-group:first-child { margin-top: 4px; }
+.folder-group-head {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 0 2px 10px; border-bottom: 1px solid var(--line-soft); margin-bottom: 14px;
+}
+.folder-group-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px; color: var(--ink-2); letter-spacing: -0.01em;
+}
+.folder-group-count { font-size: 12px; color: var(--muted); }
+
+.folder-grid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+}
+
+.folder-card {
+  background: var(--panel); border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm); box-shadow: var(--shadow);
+  padding: 14px 15px 12px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 11px;
+  transition: box-shadow .16s ease, border-color .16s ease, transform .16s ease;
+}
+.folder-card:hover { box-shadow: var(--shadow-md); border-color: var(--line); }
+.folder-card:focus-visible {
+  outline: none; border-color: var(--accent-mark);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-mark) 16%, transparent);
+}
+.folder-card.gone { opacity: .62; }
+
+.folder-top { display: flex; gap: 11px; align-items: flex-start; min-width: 0; }
+.folder-icon { width: 30px; height: 25px; flex: none; color: var(--accent-mark); margin-top: 1px; }
+.folder-icon.missing { color: var(--muted); }
+.folder-names { min-width: 0; }
+.folder-name {
+  font-size: 14px; font-weight: 600; color: var(--ink); letter-spacing: -0.015em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.folder-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; color: var(--muted); margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left;          /* keep the tail of a long path */
+}
+.folder-stats {
+  display: flex; gap: 12px; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--ink-2);
+}
+.folder-stats b { color: var(--ink); font-weight: 600; }
+.folder-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  border-top: 1px solid var(--line-soft); padding-top: 10px; margin-top: auto;
+}
+.folder-agents { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* The launch button stays quiet until the card is hovered or focused. */
+.folder-card .launch-split { opacity: 0; transition: opacity .14s ease; }
+.folder-card:hover .launch-split,
+.folder-card:focus-within .launch-split { opacity: 1; }
+@media (hover: none) { .folder-card .launch-split { opacity: 1; } }
+
+/* ---------- run button (split: run · choose) ----------------------------- */
+.launch-split { display: inline-flex; align-items: stretch; position: relative; }
+.launch-main {
+  display: inline-flex; align-items: center; gap: 7px;
+  border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 12px;
+}
+.launch-caret {
+  border-top-left-radius: 0; border-bottom-left-radius: 0;
+  margin-left: -1px; padding: 8px 10px; font-size: 11px; line-height: 1;
+}
+.launch-split .btn:disabled { opacity: .5; cursor: not-allowed; }
+.launch-main .play {
+  width: 0; height: 0; flex: none;
+  border-left: 7px solid currentColor;
+  border-top: 4.5px solid transparent; border-bottom: 4.5px solid transparent;
+}
+.launch-main.busy { opacity: .7; }
+.launch-split .menu { right: 0; left: auto; min-width: 236px; }
+.menu-item.on { background: var(--accent-wash); }
+.menu-item { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+.menu-hint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; color: var(--muted);
+}
+
+/* ---------- project detail ----------------------------------------------- */
+.notice {
+  margin-top: 14px; padding: 11px 14px; border-radius: var(--r-sm);
+  background: var(--accent-wash); border: 1px solid var(--line);
+  color: var(--ink-2); font-size: 13px;
+}
+.pathlist { display: flex; flex-direction: column; gap: 8px; }
+.pathrow {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 8px 0; border-bottom: 1px solid var(--line-soft);
+}
+.pathrow:last-child { border-bottom: 0; }
+.pathrow code {
+  font-size: 12px; color: var(--ink-2); flex: 1 1 260px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pathrow.gone code { text-decoration: line-through; color: var(--muted); }

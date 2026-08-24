@@ -16,6 +16,8 @@ const state = {
   activeKey: "",
   sessionTotal: 0,
   sessionSort: { key: "started", order: "desc" },
+  launch: null,              // {token, terminals[], commands[]} from the server
+  launchCmd: localStorage.getItem("as-launch-cmd") || "claude",
 };
 
 /* ---------- small helpers ---------------------------------------------- */
@@ -325,7 +327,7 @@ function compositionBar(segments) {
   const wrap = el("div");
   if (!total) return el("div", { class: "empty", text: "No token data" });
 
-  const W = 1000, H = 14, R = 3, GAP = 2;
+  const W = 1000, H = 14, R = 7, GAP = 2;
   const root = svg("svg", {
     class: "chart", viewBox: `0 0 ${W} ${H}`, height: H,
     preserveAspectRatio: "none", role: "img", "aria-label": "Token composition",
@@ -337,10 +339,13 @@ function compositionBar(segments) {
     const raw = (s.value / total) * W;
     const w = Math.max(raw - (i < visible.length - 1 ? GAP : 0), 1);
     const first = i === 0, last = i === visible.length - 1;
+    // A sliver narrower than the radius can't be rounded: clamp per segment,
+    // or the hand-written end caps below emit a negative-width path.
+    const r = Math.max(0, Math.min(R, w / 2, H / 2));
     let d;
-    if (first && last) d = barPath(x, 0, w, H, R, "right");
-    else if (first) d = `M${x + R} 0h${w - R}v${H}h${-(w - R)}a${R} ${R} 0 0 1 ${-R} ${-R}V${R}a${R} ${R} 0 0 1 ${R} ${-R}Z`;
-    else if (last) d = barPath(x, 0, w, H, R, "right");
+    if (first && last) d = barPath(x, 0, w, H, r, "right");
+    else if (first && r >= 0.5) d = `M${x + r} 0h${w - r}v${H}h${-(w - r)}a${r} ${r} 0 0 1 ${-r} ${-r}V${r}a${r} ${r} 0 0 1 ${r} ${-r}Z`;
+    else if (last) d = barPath(x, 0, w, H, r, "right");
     else d = `M${x} 0h${w}v${H}h${-w}Z`;
     const path = svg("path", { class: "mark", d, fill: s.color });
     path.addEventListener("mouseenter", (e) => tip.show(tipRows(s.label, [
@@ -544,6 +549,219 @@ async function viewOverview(root) {
           format: (v) => v.toLocaleString(),
         }))));
   }
+}
+
+/* ---------- projects: a folder per project ------------------------------ */
+
+/** Collapse $HOME to ~ so a card shows the part of the path that varies. */
+function tildePath(p) {
+  if (!p) return "";
+  const home = state.meta?.home || "";
+  return home && p.startsWith(home) ? "~" + p.slice(home.length) : p;
+}
+
+function folderIcon(missing) {
+  return svg("svg", { class: "folder-icon" + (missing ? " missing" : ""),
+                      viewBox: "0 0 24 20", "aria-hidden": "true" },
+    svg("path", {
+      d: "M1.5 4.2c0-1 .8-1.8 1.8-1.8h5.3c.6 0 1.2.3 1.5.8l1 1.4h9.6c1 0 1.8.8 1.8 1.8v11.4c0 1-.8 1.8-1.8 1.8H3.3c-1 0-1.8-.8-1.8-1.8V4.2Z",
+      fill: "currentColor", opacity: ".18" }),
+    svg("path", {
+      d: "M1.5 7.6h21v10c0 1-.8 1.8-1.8 1.8H3.3c-1 0-1.8-.8-1.8-1.8v-10Z",
+      fill: "currentColor", opacity: ".55" }));
+}
+
+/** Launch a terminal for a directory. The command is chosen by KEY: the
+    server owns the command strings, the browser never sends one. */
+async function launchTerminal(cwd, cmdKey, btn) {
+  if (!state.launch?.token) return toast("Launching is not available");
+  const label = state.launch.commands.find((c) => c.key === cmdKey)?.command || cmdKey;
+  if (btn) { btn.disabled = true; btn.classList.add("busy"); }
+  try {
+    const res = await api("/api/launch", {}, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: state.launch.token, cwd, command: cmdKey }),
+    });
+    toast(`${label} — opened in ${res.terminal}`);
+  } catch (err) {
+    toast("Could not launch: " + err.message, 4200);
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove("busy"); }
+  }
+}
+
+/** Split button: run the remembered command, or pick another from the menu. */
+function launchButton(cwd, { exists = true, compact = false } = {}) {
+  const cmds = state.launch?.commands || [];
+  const terminals = state.launch?.terminals || [];
+  if (!terminals.length || !cmds.length) return null;
+
+  const current = () => cmds.find((c) => c.key === state.launchCmd) || cmds[0];
+  const main = el("button", {
+    class: "btn btn-accent launch-main",
+    disabled: exists ? null : "",
+    title: exists ? `Run ${current().command} in ${cwd}`
+                  : "That directory no longer exists",
+    onclick: (e) => { e.stopPropagation(); launchTerminal(cwd, state.launchCmd, main); },
+  }, el("span", { class: "play", "aria-hidden": "true" }), 
+     compact ? "Run" : `Run ${current().label.split(",")[0]}`);
+
+  const menu = el("div", { class: "menu", hidden: "" },
+    ...cmds.map((c) => el("button", {
+      class: "menu-item" + (c.key === state.launchCmd ? " on" : ""),
+      onclick: (e) => {
+        e.stopPropagation();
+        state.launchCmd = c.key;
+        localStorage.setItem("as-launch-cmd", c.key);
+        close();
+        launchTerminal(cwd, c.key, main);
+      },
+    }, el("span", { text: c.label }), el("code", { class: "menu-hint", text: c.command }))));
+
+  const caret = el("button", {
+    class: "btn launch-caret", "aria-label": "Choose what to run",
+    disabled: exists ? null : "",
+    onclick: (e) => { e.stopPropagation(); menu.hidden ? open() : close(); },
+    text: "▾",
+  });
+  function open() {
+    menu.hidden = false;
+    document.addEventListener("click", onAway);
+    document.addEventListener("keydown", onEsc);
+  }
+  function close() {
+    menu.hidden = true;
+    document.removeEventListener("click", onAway);
+    document.removeEventListener("keydown", onEsc);
+  }
+  const onAway = (e) => { if (!wrap.contains(e.target)) close(); };
+  const onEsc = (e) => { if (e.key === "Escape") close(); };
+
+  const wrap = el("div", { class: "menu-wrap launch-split" }, main, caret, menu);
+  return wrap;
+}
+
+async function viewProjects(root) {
+  root.replaceChildren(el("div", { class: "empty", text: "Loading…" }));
+  const data = await api("/api/projects", filterParams());
+  state.launch = data.launch;
+  setPage("Projects", `${data.total} ${data.total === 1 ? "project" : "projects"} — open one to see its sessions`);
+  root.replaceChildren();
+
+  if (!data.projects.length) {
+    return root.append(el("div", { class: "empty", text: "No projects in the index yet." }));
+  }
+
+  // Group by parent directory: that is the folder structure the paths already
+  // describe, rather than one invented for the dashboard.
+  const groups = new Map();
+  for (const p of data.projects) {
+    const key = p.parent || "Unknown location";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+  const ordered = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
+
+  for (const [parent, items] of ordered) {
+    root.append(el("div", { class: "folder-group" },
+      el("div", { class: "folder-group-head" },
+        el("span", { class: "folder-group-path", text: tildePath(parent) }),
+        el("span", { class: "folder-group-count",
+                     text: `${items.length} ${items.length === 1 ? "folder" : "folders"}` })),
+      el("div", { class: "folder-grid" }, ...items.map(projectCard))));
+  }
+}
+
+function projectCard(p) {
+  const open = () => go(`#/project/${encodeURIComponent(p.project)}`);
+  const launch = launchButton(p.cwd, { exists: p.exists, compact: true });
+  return el("div", {
+    class: "folder-card" + (p.exists ? "" : " gone"),
+    tabindex: "0", role: "button",
+    onclick: open,
+    onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } },
+  },
+    el("div", { class: "folder-top" },
+      folderIcon(!p.exists),
+      el("div", { class: "folder-names" },
+        el("div", { class: "folder-name", text: p.project }),
+        el("div", { class: "folder-path", text: p.exists ? tildePath(p.cwd) : "path missing" })),
+    ),
+    el("div", { class: "folder-stats" },
+      el("span", {}, el("b", { text: String(p.sessions) }), p.sessions === 1 ? " session" : " sessions"),
+      el("span", { class: "dim", text: fmtNum(p.tokens) + " tok" }),
+      el("span", { class: "dim", text: fmtDate(p.last_at) })),
+    el("div", { class: "folder-foot" },
+      el("div", { class: "folder-agents" }, ...p.agents.map((a) =>
+        el("span", { class: "badge" },
+          el("span", { class: "dot", style: `background:${AGENT_SERIES[a] || "var(--muted)"}` }), a))),
+      launch || el("span")),
+  );
+}
+
+async function viewProject(root, name) {
+  root.replaceChildren(el("div", { class: "empty", text: "Loading…" }));
+  const p = await api(`/api/project/${encodeURIComponent(name)}`);
+  state.launch = p.launch;
+  const data = await api("/api/sessions", { project: name, sort: "started", order: "desc", limit: 200 });
+
+  setPage(p.project, tildePath(p.cwd) || "");
+  root.replaceChildren();
+
+  root.append(el("div", { class: "toolbar" },
+    el("a", { class: "backlink", href: "#/projects", text: "← All projects" }),
+    el("span", { class: "rowspacer" }),
+    launchButton(p.cwd, { exists: p.exists })));
+
+  if (!p.exists) {
+    root.append(el("div", { class: "notice",
+      text: `This project's directory is no longer on disk: ${p.cwd || "unknown"}` }));
+  }
+
+  root.append(el("div", { class: "grid tiles", style: "margin-top:14px" },
+    tile("Sessions", fmtNum(p.sessions), "", `${fmtNum(p.messages)} messages`),
+    tile("Tokens", fmtNum(p.tokens), "", `${fmtNum(p.tool_calls)} tool calls`),
+    tile("Est. cost", fmtCostExact(p.cost_usd || 0), "", "at API list rates"),
+    tile("Active", fmtDate(p.first_at) + " → " + fmtDate(p.last_at), "",
+      p.duration_s ? fmtDur(p.duration_s) + " of session time" : ""),
+  ));
+
+  if (p.paths?.length > 1) {
+    root.append(el("div", { class: "grid", style: "margin-top:16px" },
+      card("Directories", "This project has been opened from more than one path",
+        el("div", { class: "pathlist" }, ...p.paths.map((d) =>
+          el("div", { class: "pathrow" + (d.exists ? "" : " gone") },
+            el("code", { text: tildePath(d.cwd) }),
+            el("span", { class: "dim", text: `${d.sessions} · ${fmtDate(d.last_at)}` }),
+            d.exists ? launchButton(d.cwd, { compact: true }) : null))))));
+  }
+
+  const rows = data.sessions.map((s) =>
+    el("tr", { class: "row", onclick: () => go(`#/session/${encodeURIComponent(s.key)}`) },
+      el("td", { class: "wrapcell" },
+        el("div", { class: "title-cell", text: s.title || "(untitled)" }),
+        s.first_prompt
+          ? el("div", { class: "dim", style: "font-size:11px;margin-top:2px" },
+              s.first_prompt.slice(0, 110).replace(/\s+/g, " "))
+          : null),
+      el("td", {}, el("span", { class: "badge" },
+        el("span", { class: "dot",
+          style: `background:${AGENT_SERIES[s.agent] || "var(--muted)"}` }), s.agent)),
+      el("td", { class: "dim" }, s.git_branch || "—"),
+      el("td", { class: "num dim" }, fmtDate(s.started_at)),
+      el("td", { class: "num dim" }, s.duration_s ? fmtDur(s.duration_s) : "—"),
+      el("td", { class: "num" }, fmtNum(s.n_messages)),
+      el("td", { class: "num" }, fmtNum(s.total_tokens)),
+      el("td", { class: "num" }, s.unpriced && !s.cost_usd ? "—" : fmtCost(s.cost_usd))));
+
+  root.append(el("div", { class: "card table-card", style: "margin-top:16px" },
+    el("div", { class: "table-scroll" },
+      el("table", {},
+        el("thead", {}, el("tr", {},
+          ...["Session", "Agent", "Branch", "Started", "Duration", "Msgs", "Tokens", "Est. cost"]
+            .map((h, i) => el("th", { class: i >= 3 ? "num" : "", text: h })))),
+        el("tbody", {}, ...rows)))));
 }
 
 const SESSION_COLUMNS = [
@@ -1031,6 +1249,7 @@ function recentSessions(limit = 8) {
 async function buildFilters() {
   const meta = await api("/api/meta");
   state.meta = meta;
+  state.launch = meta.launch || state.launch;
 
   $("#agentChips").replaceChildren(...meta.agents.map((a) =>
     el("button", {
@@ -1187,18 +1406,25 @@ function render() {
 
   for (const a of document.querySelectorAll("#nav a")) {
     a.classList.toggle("active",
-      a.dataset.tab === tab || (tab === "session" && a.dataset.tab === "sessions"));
+      a.dataset.tab === tab ||
+      (tab === "session" && a.dataset.tab === "sessions") ||
+      (tab === "project" && a.dataset.tab === "projects"));
   }
 
   state.activeKey = tab === "session" ? decodeURIComponent(parts.slice(1).join("/")) : "";
-  // Global filters and the KPI strip belong to the dashboard, not to one session.
-  $("#filterrow").style.display = tab === "session" ? "none" : "";
+  // Global filters and the KPI strip belong to the dashboard, not to one
+  // session or one project — those already scope themselves.
+  const scoped = tab === "session" || tab === "project";
+  $("#filterrow").style.display = scoped ? "none" : "";
   $("#kpis").style.display = tab === "overview" ? "" : "none";
 
   const done = (p) => p.catch((err) =>
     root.replaceChildren(el("div", { class: "empty", text: "Error: " + err.message })));
 
   if (tab === "sessions") return done(viewSessions(root));
+  if (tab === "projects") return done(viewProjects(root));
+  if (tab === "project" && parts[1])
+    return done(viewProject(root, decodeURIComponent(parts.slice(1).join("/"))));
   if (tab === "search") return done(viewSearch(root));
   if (tab === "session" && parts[1]) return done(viewSession(root, state.activeKey));
   return done(viewOverview(root));
@@ -1240,8 +1466,9 @@ function initKeys() {
     else if (e.key === "t") toggleTheme();
     else if (e.key === "r") reindex();
     else if (e.key === "1") go("#/overview");
-    else if (e.key === "2") go("#/sessions");
-    else if (e.key === "3") go("#/search");
+    else if (e.key === "2") go("#/projects");
+    else if (e.key === "3") go("#/sessions");
+    else if (e.key === "4") go("#/search");
   });
 }
 

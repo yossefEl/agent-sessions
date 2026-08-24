@@ -6,14 +6,32 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import sqlite3
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import index as idx
+from . import launcher
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+
+# The browser picks a command by KEY, never by sending a command string. Even
+# if every other check below were defeated, the worst a request can do is start
+# one of these.
+LAUNCH_COMMANDS = {
+    "claude": ("claude", "Claude Code"),
+    "claude-continue": ("claude --continue", "Claude Code, continuing the last session"),
+    "claude-resume": ("claude --resume", "Claude Code, pick a session to resume"),
+    "codex": ("codex", "Codex"),
+    "shell": ("$SHELL", "A plain shell"),
+}
+
+# Minted per server run. A cross-origin page cannot read /api/meta (CORS blocks
+# reading the response), so it cannot learn this, which is what stops a random
+# website from POSTing to localhost and opening terminals.
+LAUNCH_TOKEN = secrets.token_urlsafe(24)
 
 SORT_COLUMNS = {
     "started": "started_at",
@@ -79,6 +97,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.static(path[len("/static/"):])
             if path == "/api/meta":
                 return self.api_meta()
+            if path == "/api/projects":
+                return self.api_projects(q)
+            m = re.match(r"^/api/project/(.+)$", path)
+            if m:
+                return self.api_project(unquote(m.group(1)))
             if path == "/api/overview":
                 return self.api_overview(q)
             if path == "/api/sessions":
@@ -96,7 +119,8 @@ class Handler(BaseHTTPRequestHandler):
         self.json({"error": "not found"}, 404)
 
     def do_POST(self):
-        if urlparse(self.path).path == "/api/reindex":
+        path = urlparse(self.path).path
+        if path == "/api/reindex":
             try:
                 stats = idx.reindex(self.home)
                 if conn := getattr(self._local, "conn", None):
@@ -105,7 +129,35 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(stats)
             except Exception as exc:
                 return self.json({"error": str(exc)}, 500)
+        if path == "/api/launch":
+            return self.api_launch()
         self.json({"error": "not found"}, 404)
+
+    # -- request helpers --------------------------------------------------
+    def _body(self) -> dict:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return {}
+        if length <= 0 or length > 64_000:
+            return {}
+        try:
+            return json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, OSError):
+            return {}
+
+    def _same_origin(self) -> bool:
+        """Reject a POST that some other page in the browser sent here.
+
+        The dashboard is served from this origin, so its own requests either
+        carry a matching Origin or none at all (same-origin fetch in some
+        browsers). Anything naming a different origin is not ours.
+        """
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        host = self.headers.get("Host") or ""
+        return urlparse(origin).netloc == host
 
     # -- static -----------------------------------------------------------
     def static(self, name: str) -> None:
@@ -139,6 +191,8 @@ class Handler(BaseHTTPRequestHandler):
             "db_bytes": os.path.getsize(db) if os.path.exists(db) else 0,
             "prices_path": idx.prices_path(self.home),
             "fts": idx.has_fts(self.db),
+            "home": os.path.expanduser("~"),
+            "launch": self.launch_info(),
         })
 
     def _filters(self, q: dict) -> tuple[str, list]:
@@ -235,6 +289,115 @@ class Handler(BaseHTTPRequestHandler):
                    GROUP BY tool_name ORDER BY n DESC LIMIT 15"""
             ),
         })
+
+    # -- projects ---------------------------------------------------------
+    def _project_rows(self, q: dict) -> list[dict]:
+        """One row per project, newest activity first.
+
+        cwd is the directory of that project's most recent session: a project
+        can be reached from more than one path over its life (moved, renamed,
+        a worktree), and the latest one is the one worth opening.
+        """
+        clause, args = self._filters({k: v for k, v in q.items() if k != "project"})
+        rows = self.rows(
+            f"""SELECT project,
+                       COUNT(*)                        sessions,
+                       COALESCE(SUM(total_tokens),0)   tokens,
+                       COALESCE(SUM(cost_usd),0)       cost_usd,
+                       COALESCE(SUM(n_messages),0)     messages,
+                       COALESCE(SUM(n_tool_calls),0)   tool_calls,
+                       COALESCE(SUM(duration_s),0)     duration_s,
+                       MIN(started_at)                 first_at,
+                       MAX(started_at)                 last_at,
+                       COUNT(DISTINCT agent)           n_agents,
+                       GROUP_CONCAT(DISTINCT agent)    agents,
+                       (SELECT s2.cwd FROM sessions s2
+                         WHERE s2.project = sessions.project AND s2.cwd IS NOT NULL
+                         ORDER BY s2.started_at DESC LIMIT 1) cwd
+                FROM sessions{clause}{' AND' if clause else ' WHERE'}
+                     project IS NOT NULL
+                GROUP BY project
+                ORDER BY last_at IS NULL, last_at DESC""",
+            args,
+        )
+        for r in rows:
+            r["agents"] = sorted((r.get("agents") or "").split(",")) if r.get("agents") else []
+            cwd = r.get("cwd")
+            r["exists"] = bool(cwd and os.path.isdir(cwd))
+            r["parent"] = os.path.dirname(cwd) if cwd else ""
+        return rows
+
+    def api_projects(self, q: dict) -> None:
+        rows = self._project_rows(q)
+        self.json({
+            "projects": rows,
+            "total": len(rows),
+            "launch": self.launch_info(),
+        })
+
+    def api_project(self, name: str) -> None:
+        rows = [r for r in self._project_rows({}) if r["project"] == name]
+        if not rows:
+            return self.json({"error": "no such project"}, 404)
+        proj = rows[0]
+        proj["paths"] = self.rows(
+            """SELECT cwd, COUNT(*) sessions, MAX(started_at) last_at
+               FROM sessions WHERE project = ? AND cwd IS NOT NULL
+               GROUP BY cwd ORDER BY last_at DESC""",
+            (name,),
+        )
+        for p in proj["paths"]:
+            p["exists"] = bool(p["cwd"] and os.path.isdir(p["cwd"]))
+        proj["branches"] = self.rows(
+            """SELECT git_branch, COUNT(*) sessions FROM sessions
+               WHERE project = ? AND git_branch IS NOT NULL
+               GROUP BY git_branch ORDER BY sessions DESC LIMIT 8""",
+            (name,),
+        )
+        proj["by_day"] = self.rows(
+            """SELECT day, COUNT(*) sessions, COALESCE(SUM(total_tokens),0) tokens
+               FROM sessions WHERE project = ? AND day IS NOT NULL
+               GROUP BY day ORDER BY day""",
+            (name,),
+        )
+        proj["launch"] = self.launch_info()
+        self.json(proj)
+
+    # -- launching a terminal ---------------------------------------------
+    def launch_info(self) -> dict:
+        return {
+            "token": LAUNCH_TOKEN,
+            "terminals": launcher.available_terminals(),
+            "commands": [{"key": k, "command": v[0], "label": v[1]}
+                         for k, v in LAUNCH_COMMANDS.items()],
+        }
+
+    def api_launch(self) -> None:
+        if not self._same_origin():
+            return self.json({"error": "cross-origin request refused"}, 403)
+        body = self._body()
+        if body.get("token") != LAUNCH_TOKEN:
+            return self.json({"error": "bad or missing launch token"}, 403)
+
+        entry = LAUNCH_COMMANDS.get(body.get("command") or "claude")
+        if not entry:
+            return self.json({"error": "unknown command"}, 400)
+        command = entry[0]
+        if command == "$SHELL":
+            command = os.environ.get("SHELL") or "/bin/sh"
+
+        # The directory must be one this index has actually seen. A request
+        # cannot name a path of its own choosing.
+        cwd = body.get("cwd") or ""
+        known = self.rows("SELECT 1 FROM sessions WHERE cwd = ? LIMIT 1", (cwd,))
+        if not known:
+            return self.json({"error": "that directory is not in the index"}, 400)
+
+        try:
+            result = launcher.launch(cwd, command, body.get("terminal"))
+        except launcher.LaunchError as exc:
+            return self.json({"error": str(exc)}, 400)
+        self.json({"ok": True, **result})
 
     def api_sessions(self, q: dict) -> None:
         clause, args = self._filters(q)
